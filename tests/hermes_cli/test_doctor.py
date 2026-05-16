@@ -101,11 +101,6 @@ class TestDoctorEnvFileEncoding:
         monkeypatch.setitem(sys.modules, "model_tools", fake_model_tools)
         monkeypatch.setattr(doctor_mod, "_build_apikey_providers_list", lambda: [])
         monkeypatch.setattr(doctor_mod, "_APIKEY_PROVIDERS_CACHE", [])
-        monkeypatch.setattr(
-            doctor_mod,
-            "_has_healthy_oauth_fallback_for_apikey_provider",
-            lambda _label: False,
-        )
 
         # Run doctor. If the .env read still uses locale encoding, this
         # raises UnicodeDecodeError and the test fails.
@@ -964,10 +959,10 @@ def _run_doctor_with_healthy_oauth_fallback(
     monkeypatch.setattr(_auth_mod, "get_nous_auth_status", lambda: {"logged_in": True})
     monkeypatch.setattr(_auth_mod, "get_codex_auth_status", lambda: {})
     monkeypatch.setattr(
-        _auth_mod, "get_gemini_oauth_auth_status", lambda: gemini_oauth_status
+        _auth_mod, "get_gemini_oauth_auth_status", lambda: {"logged_in": False}
     )
     monkeypatch.setattr(
-        _auth_mod, "get_minimax_oauth_auth_status", lambda: minimax_oauth_status
+        _auth_mod, "get_minimax_oauth_auth_status", lambda: {"logged_in": False}
     )
 
     def fake_get(url, headers=None, timeout=None):
@@ -985,41 +980,28 @@ def _run_doctor_with_healthy_oauth_fallback(
 
 
 @pytest.mark.parametrize(
-    (
-        "env_key",
-        "bad_key",
-        "failing_host",
-        "gemini_oauth_status",
-        "minimax_oauth_status",
-        "unexpected_issue",
-    ),
+    ("env_key", "bad_key", "failing_host", "unexpected_issue"),
     [
         (
             "GOOGLE_API_KEY",
             "bad-gemini-key",
             "googleapis.com",
-            {"logged_in": True, "email": "user@example.com"},
-            {},
             "Check GOOGLE_API_KEY in .env",
         ),
         (
             "MINIMAX_API_KEY",
             "bad-minimax-key",
             "minimax.io",
-            {},
-            {"logged_in": True, "region": "global"},
             "Check MINIMAX_API_KEY in .env",
         ),
     ],
 )
-def test_run_doctor_ignores_invalid_direct_keys_when_oauth_fallback_is_healthy(
+def test_run_doctor_reports_invalid_direct_keys_without_oauth_fallback(
     monkeypatch,
     tmp_path,
     env_key,
     bad_key,
     failing_host,
-    gemini_oauth_status,
-    minimax_oauth_status,
     unexpected_issue,
 ):
     out = _run_doctor_with_healthy_oauth_fallback(
@@ -1028,9 +1010,9 @@ def test_run_doctor_ignores_invalid_direct_keys_when_oauth_fallback_is_healthy(
         env_key=env_key,
         bad_key=bad_key,
         failing_host=failing_host,
-        gemini_oauth_status=gemini_oauth_status,
-        minimax_oauth_status=minimax_oauth_status,
+        gemini_oauth_status={},
+        minimax_oauth_status={},
     )
 
     assert "invalid API key" in out
-    assert unexpected_issue not in out
+    assert unexpected_issue in out
