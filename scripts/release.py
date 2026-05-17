@@ -100,6 +100,7 @@ AUTHOR_MAP = {
     "tolle.lege+github@gmail.com": "InB4DevOps",
     "73686890+InB4DevOps@users.noreply.github.com": "InB4DevOps",
     "147827411+EloquentBrush@users.noreply.github.com": "AhmetArif0",
+    "hermes-agent@users.noreply.github.com": "hermes-agent",
     "97489706+purzbeats@users.noreply.github.com": "purzbeats",
     "hugosequier@gmail.com": "Hugo-SEQUIER",
     "128259593+Gutslabs@users.noreply.github.com": "Gutslabs",
