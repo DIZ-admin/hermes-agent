@@ -168,6 +168,9 @@ AUTHOR_MAP = {
     "ysfalweshcan@gmail.com": "Junass1",
     "bartokmagic@proton.me": "Bartok9",
     "bartok9@users.noreply.github.com": "Bartok9",
+    "chris.eth@qq.com": "duyua9",
+    "pepelax@users.noreply.github.com": "pepelax",
+    "pochi-gio@users.noreply.github.com": "pochi-gio",
     "erhanyasarx@gmail.com": "erhnysr",  # PR #25198 salvage (tool-progress flood-control)
     "cryptobyz.airdrop@gmail.com": "CryptoByz",  # PR #25630 salvage (polling conflict Stage 1+2)
     "fabioxxx@gmail.com": "fabiosiqueira",  # PR #27212 salvage (bg-process notif anchor)
