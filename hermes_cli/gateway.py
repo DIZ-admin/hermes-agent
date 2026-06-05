@@ -1026,16 +1026,8 @@ def _recover_pending_systemd_restart(
 def _probe_launchd_service_running() -> bool:
     if not get_launchd_plist_path().exists():
         return False
-    try:
-        result = subprocess.run(
-            ["launchctl", "list", get_launchd_label()],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return result.returncode == 0
+    loaded, _ = _launchd_status_probe(timeout=10)
+    return loaded
 
 
 def get_gateway_runtime_snapshot(system: bool = False) -> GatewayRuntimeSnapshot:
@@ -3004,6 +2996,43 @@ def _launchd_domain() -> str:
     return f"gui/{os.getuid()}"  # windows-footgun: ok — POSIX launchd (macOS) helper, never invoked on Windows
 
 
+def _launchd_status_probe(timeout: int = 10) -> tuple[bool, str]:
+    """Return whether the current profile's launchd job is loaded plus output.
+
+    ``launchctl list <label>`` only queries the caller's bootstrap port. On
+    modern macOS a LaunchAgent can be visible in the explicit ``gui/<uid>``
+    domain while ``launchctl list`` says "Could not find service ... in domain
+    for port".  Prefer the legacy command for backward-compatible output, then
+    fall back to the explicit domain form used by start/stop/restart.
+    """
+    label = get_launchd_label()
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", label],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            return True, result.stdout
+        list_output = (result.stdout or "") + (result.stderr or "")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        list_output = ""
+
+    target = f"{_launchd_domain()}/{label}"
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", target],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = result.stdout or result.stderr or list_output
+        return result.returncode == 0, output
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False, list_output
+
+
 def generate_launchd_plist() -> str:
     python_path = get_python_path()
     # Stable cwd anchor — never the volatile source checkout. See
@@ -3355,19 +3384,7 @@ def launchd_restart():
 
 def launchd_status(deep: bool = False):
     plist_path = get_launchd_plist_path()
-    label = get_launchd_label()
-    try:
-        result = subprocess.run(
-            ["launchctl", "list", label],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        loaded = result.returncode == 0
-        loaded_output = result.stdout
-    except subprocess.TimeoutExpired:
-        loaded = False
-        loaded_output = ""
+    loaded, loaded_output = _launchd_status_probe(timeout=10)
 
     print(f"Launchd plist: {plist_path}")
     if launchd_plist_is_current():
@@ -4716,16 +4733,8 @@ def _is_service_running() -> bool:
 
         return False
     elif is_macos() and get_launchd_plist_path().exists():
-        try:
-            result = subprocess.run(
-                ["launchctl", "list", get_launchd_label()],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            return result.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
+        loaded, _ = _launchd_status_probe(timeout=10)
+        return loaded
     elif is_windows():
         from hermes_cli import gateway_windows
 

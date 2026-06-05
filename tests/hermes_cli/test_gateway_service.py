@@ -679,6 +679,87 @@ class TestLaunchdServiceRecovery:
         assert "not loaded" in output.lower()
 
 
+    def test_launchd_status_falls_back_to_explicit_gui_domain(self, tmp_path, monkeypatch, capsys):
+        plist_path = tmp_path / "ai.hermes.gateway.plist"
+        plist_path.write_text(gateway_cli.generate_launchd_plist(), encoding="utf-8")
+        label = gateway_cli.get_launchd_label()
+        target = f"{gateway_cli._launchd_domain()}/{label}"
+        calls = []
+
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+        monkeypatch.setattr(gateway_cli, "launchd_plist_is_current", lambda: True)
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd == ["launchctl", "list", label]:
+                return SimpleNamespace(
+                    returncode=113,
+                    stdout="",
+                    stderr=f'Could not find service "{label}" in domain for port',
+                )
+            if cmd == ["launchctl", "print", target]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f"{target} = {{\n\tstate = running\n}}\n",
+                    stderr="",
+                )
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        gateway_cli.launchd_status()
+
+        output = capsys.readouterr().out
+        assert "Gateway service is loaded" in output
+        assert "state = running" in output
+        assert calls == [
+            ["launchctl", "list", label],
+            ["launchctl", "print", target],
+        ]
+
+    def test_probe_launchd_service_running_uses_gui_domain_fallback(self, tmp_path, monkeypatch):
+        plist_path = tmp_path / "ai.hermes.gateway.plist"
+        plist_path.write_text(gateway_cli.generate_launchd_plist(), encoding="utf-8")
+        label = gateway_cli.get_launchd_label()
+        target = f"{gateway_cli._launchd_domain()}/{label}"
+
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+
+        def fake_run(cmd, **kwargs):
+            if cmd == ["launchctl", "list", label]:
+                return SimpleNamespace(returncode=113, stdout="", stderr="not found")
+            if cmd == ["launchctl", "print", target]:
+                return SimpleNamespace(returncode=0, stdout="state = running\n", stderr="")
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        assert gateway_cli._probe_launchd_service_running() is True
+        assert gateway_cli._is_service_running() is True
+
+    def test_launchd_status_probe_prefers_legacy_list_output(self, tmp_path, monkeypatch):
+        plist_path = tmp_path / "ai.hermes.gateway.plist"
+        plist_path.write_text(gateway_cli.generate_launchd_plist(), encoding="utf-8")
+        label = gateway_cli.get_launchd_label()
+        calls = []
+
+        monkeypatch.setattr(gateway_cli, "get_launchd_plist_path", lambda: plist_path)
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd == ["launchctl", "list", label]:
+                return SimpleNamespace(returncode=0, stdout="{\n\tPID = 123;\n};\n", stderr="")
+            raise AssertionError("launchctl print should not run when list succeeds")
+
+        monkeypatch.setattr(gateway_cli.subprocess, "run", fake_run)
+
+        loaded, output = gateway_cli._launchd_status_probe()
+
+        assert loaded is True
+        assert "PID = 123" in output
+        assert calls == [["launchctl", "list", label]]
+
+
 class TestGatewayServiceDetection:
     def test_supports_systemd_services_requires_systemctl_binary(self, monkeypatch):
         monkeypatch.setattr(gateway_cli, "is_linux", lambda: True)
