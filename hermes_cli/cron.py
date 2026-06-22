@@ -57,7 +57,13 @@ def _normalize_skills(single_skill=None, skills: Optional[Iterable[str]] = None)
 def _cron_api(**kwargs):
     from tools.cronjob_tools import cronjob as cronjob_tool
 
-    return json.loads(cronjob_tool(**kwargs))
+    # The cron tool ultimately persists through cron.jobs. Those helpers keep
+    # their store paths in module globals resolved from HERMES_HOME at import
+    # time, so retarget them here as well; otherwise CLI mutations under
+    # `hermes --profile <name>` still land in the root ~/.hermes store even
+    # after list/status were fixed.
+    with _active_profile_cron_store():
+        return json.loads(cronjob_tool(**kwargs))
 
 
 @contextmanager
@@ -311,15 +317,16 @@ def cron_create(args):
 
 
 def cron_edit(args):
-    from cron.jobs import AmbiguousJobReference, resolve_job_ref
+    from cron.jobs import AmbiguousJobReference
 
-    try:
-        job = resolve_job_ref(args.job_id)
-    except AmbiguousJobReference as exc:
-        print(color(str(exc), Colors.RED))
-        for m in exc.matches:
-            print(f"  {m['id']}  (name: {m.get('name')!r})")
-        return 1
+    with _active_profile_cron_store() as cron_jobs:
+        try:
+            job = cron_jobs.resolve_job_ref(args.job_id)
+        except AmbiguousJobReference as exc:
+            print(color(str(exc), Colors.RED))
+            for m in exc.matches:
+                print(f"  {m['id']}  (name: {m.get('name')!r})")
+            return 1
     if not job:
         print(color(f"Job not found: {args.job_id}", Colors.RED))
         return 1
