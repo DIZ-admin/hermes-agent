@@ -9,10 +9,11 @@ import json
 import logging
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from hermes_constants import display_hermes_home
+from hermes_constants import display_hermes_home, get_default_hermes_root, get_hermes_home
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,57 @@ def _notify_provider_jobs_changed_safe() -> None:
         _notify_provider_jobs_changed()
     except Exception:
         pass
+
+
+def _in_active_profile_cron_store(fn, *args, **kwargs):
+    """Run ``fn`` while ``cron.jobs`` points at the active profile cron store."""
+    with _active_profile_cron_store():
+        return fn(*args, **kwargs)
+
+
+@contextmanager
+def _active_profile_cron_store():
+    """Temporarily point cron.jobs at the active HERMES_HOME cron store.
+
+    The CLI already retargets ``cron.jobs`` globals this way so
+    ``hermes --profile <name> cron ...`` sees that profile's ``cron/jobs.json``.
+    The cronjob tool runs in the same process but previously skipped that
+    retargeting, so tool-driven ``list``/``create``/``update`` looked at the
+    machine-root store while profile-aware CLI/runtime used the profile-local
+    store. That produced the observed split-brain: ``cronjob(action='list')``
+    returned ``[]`` while ``HERMES_HOME=... hermes cron list`` showed real jobs.
+    """
+    from cron import jobs as cron_jobs
+
+    active_home = get_hermes_home().resolve()
+    default_root = get_default_hermes_root().resolve()
+    target_home = active_home if active_home != default_root else default_root
+    target_cron_dir = target_home / "cron"
+
+    old_cron_dir = cron_jobs.CRON_DIR
+    old_jobs_file = cron_jobs.JOBS_FILE
+    old_output_dir = cron_jobs.OUTPUT_DIR
+
+    # If a caller already retargeted cron.jobs away from its import-time home
+    # (e.g. hermes_cli.cron wraps the tool in its own active-profile context, or
+    # a test fixture patched the globals), respect that explicit store instead of
+    # overriding it with this module's own view of HERMES_HOME.
+    module_default_cron_dir = (cron_jobs.HERMES_DIR / "cron").resolve()
+    if old_cron_dir.resolve() != module_default_cron_dir:
+        try:
+            yield cron_jobs
+        finally:
+            return
+
+    cron_jobs.CRON_DIR = target_cron_dir
+    cron_jobs.JOBS_FILE = cron_jobs.CRON_DIR / "jobs.json"
+    cron_jobs.OUTPUT_DIR = cron_jobs.CRON_DIR / "output"
+    try:
+        yield cron_jobs
+    finally:
+        cron_jobs.CRON_DIR = old_cron_dir
+        cron_jobs.JOBS_FILE = old_jobs_file
+        cron_jobs.OUTPUT_DIR = old_output_dir
 
 
 # ---------------------------------------------------------------------------
@@ -582,14 +634,15 @@ def cronjob(
                 from cron.jobs import get_job as _get_job
                 refs = [context_from] if isinstance(context_from, str) else context_from
                 for ref_id in refs:
-                    if not _get_job(ref_id):
+                    if not _in_active_profile_cron_store(_get_job, ref_id):
                         return tool_error(
                             f"context_from job '{ref_id}' not found. "
                             "Use cronjob(action='list') to see available jobs.",
                             success=False,
                         )
 
-            job = create_job(
+            job = _in_active_profile_cron_store(
+                create_job,
                 prompt=prompt or "",
                 schedule=schedule,
                 name=name,
@@ -625,14 +678,14 @@ def cronjob(
             )
 
         if normalized == "list":
-            jobs = [_format_job(job) for job in list_jobs(include_disabled=include_disabled)]
+            jobs = [_format_job(job) for job in _in_active_profile_cron_store(list_jobs, include_disabled=include_disabled)]
             return json.dumps({"success": True, "count": len(jobs), "jobs": jobs}, indent=2)
 
         if not job_id:
             return tool_error(f"job_id is required for action '{normalized}'", success=False)
 
         try:
-            job = resolve_job_ref(job_id)
+            job = _in_active_profile_cron_store(resolve_job_ref, job_id)
         except AmbiguousJobReference as exc:
             return json.dumps(
                 {
@@ -659,7 +712,7 @@ def cronjob(
         job_id = job["id"]
 
         if normalized == "remove":
-            removed = remove_job(job_id)
+            removed = _in_active_profile_cron_store(remove_job, job_id)
             if not removed:
                 return tool_error(f"Failed to remove job '{job_id}'", success=False)
             _notify_provider_jobs_changed_safe()
@@ -677,12 +730,12 @@ def cronjob(
             )
 
         if normalized == "pause":
-            updated = pause_job(job_id, reason=reason)
+            updated = _in_active_profile_cron_store(pause_job, job_id, reason=reason)
             _notify_provider_jobs_changed_safe()
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
         if normalized == "resume":
-            updated = resume_job(job_id)
+            updated = _in_active_profile_cron_store(resume_job, job_id)
             _notify_provider_jobs_changed_safe()
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
@@ -692,9 +745,9 @@ def cronjob(
             # no gateway/ticker is active (the #41037 case). The claim inside
             # _execute_job_now advances next_run_at and blocks a concurrent tick
             # from double-firing.
-            exec_result = _execute_job_now(job)
+            exec_result = _in_active_profile_cron_store(_execute_job_now, job)
             # Re-read so the response reflects the post-run last_run_at/last_status.
-            result = _format_job(get_job(job_id) or {"id": job_id})
+            result = _format_job(_in_active_profile_cron_store(get_job, job_id) or {"id": job_id})
             result["executed"] = exec_result.get("claimed", False)
             result["execution_success"] = exec_result.get("success", False)
             if not exec_result.get("claimed", False):
@@ -744,7 +797,7 @@ def cronjob(
                 if refs:
                     from cron.jobs import get_job as _get_job
                     for ref_id in refs:
-                        if not _get_job(ref_id):
+                        if not _in_active_profile_cron_store(_get_job, ref_id):
                             return tool_error(
                                 f"context_from job '{ref_id}' not found. "
                                 "Use cronjob(action='list') to see available jobs.",
@@ -786,7 +839,7 @@ def cronjob(
                     updates["enabled"] = True
             if not updates:
                 return tool_error("No updates provided.", success=False)
-            updated = update_job(job_id, updates)
+            updated = _in_active_profile_cron_store(update_job, job_id, updates)
             _notify_provider_jobs_changed_safe()
             return json.dumps({"success": True, "job": _format_job(updated)}, indent=2)
 
