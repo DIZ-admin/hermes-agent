@@ -1,6 +1,7 @@
 """Tests for hermes_cli.cron command handling."""
 
 from argparse import Namespace
+from pathlib import Path
 
 import pytest
 
@@ -13,6 +14,8 @@ def tmp_cron_dir(tmp_path, monkeypatch):
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
+    monkeypatch.setattr("hermes_cli.cron.get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr("hermes_cli.cron.get_default_hermes_root", lambda: tmp_path)
     return tmp_path
 
 
@@ -121,3 +124,38 @@ class TestCronCommandLifecycle:
 
         out = capsys.readouterr().out
         assert "Repeat:    ∞" in out
+
+    def test_list_uses_active_profile_cron_store(self, tmp_path, monkeypatch, capsys):
+        """`hermes --profile <name> cron list` should inspect that profile's
+        cron/jobs.json, not only the machine-root store."""
+        import cron.jobs as cron_jobs
+        import hermes_cli.cron as cron_mod
+
+        root_home = tmp_path / ".hermes"
+        profile_home = root_home / "profiles" / "worker"
+        profile_cron = profile_home / "cron"
+        profile_cron.mkdir(parents=True)
+
+        old_cron_dir = cron_jobs.CRON_DIR
+        old_jobs_file = cron_jobs.JOBS_FILE
+        old_output_dir = cron_jobs.OUTPUT_DIR
+        cron_jobs.CRON_DIR = profile_cron
+        cron_jobs.JOBS_FILE = profile_cron / "jobs.json"
+        cron_jobs.OUTPUT_DIR = profile_cron / "output"
+        try:
+            job = create_job(prompt="worker heartbeat", schedule="every 1h", name="worker-heartbeat")
+        finally:
+            cron_jobs.CRON_DIR = old_cron_dir
+            cron_jobs.JOBS_FILE = old_jobs_file
+            cron_jobs.OUTPUT_DIR = old_output_dir
+
+        monkeypatch.setattr(cron_mod, "get_hermes_home", lambda: profile_home)
+        monkeypatch.setattr(cron_mod, "get_default_hermes_root", lambda: root_home)
+        monkeypatch.setattr("hermes_cli.gateway.find_gateway_pids", lambda: [])
+
+        cron_command(Namespace(cron_command="list", all=True))
+
+        out = capsys.readouterr().out
+        assert job["id"] in out
+        assert "worker-heartbeat" in out
+        assert "No scheduled jobs." not in out
