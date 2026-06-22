@@ -8,8 +8,11 @@ pause/resume/run/remove, status, and tick.
 import json
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, List, Optional
+
+from hermes_constants import get_default_hermes_root, get_hermes_home
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -54,14 +57,48 @@ def _normalize_skills(single_skill=None, skills: Optional[Iterable[str]] = None)
 def _cron_api(**kwargs):
     from tools.cronjob_tools import cronjob as cronjob_tool
 
-    return json.loads(cronjob_tool(**kwargs))
+    # The cron tool ultimately persists through cron.jobs. Those helpers keep
+    # their store paths in module globals resolved from HERMES_HOME at import
+    # time, so retarget them here as well; otherwise CLI mutations under
+    # `hermes --profile <name>` still land in the root ~/.hermes store even
+    # after list/status were fixed.
+    with _active_profile_cron_store():
+        return json.loads(cronjob_tool(**kwargs))
+
+
+@contextmanager
+def _active_profile_cron_store():
+    """Temporarily retarget cron.jobs globals to the active HERMES_HOME store.
+
+    The dashboard already does this for cross-profile inspection. The CLI needs
+    the same behavior for `hermes --profile <name> cron list/status`, otherwise
+    those commands look only at the machine-root cron store and falsely report
+    no jobs when a named profile has its own cron/jobs.json.
+    """
+    from cron import jobs as cron_jobs
+
+    active_home = get_hermes_home().resolve()
+    default_root = get_default_hermes_root().resolve()
+    target_home = active_home if active_home != default_root else default_root
+
+    old_cron_dir = cron_jobs.CRON_DIR
+    old_jobs_file = cron_jobs.JOBS_FILE
+    old_output_dir = cron_jobs.OUTPUT_DIR
+    cron_jobs.CRON_DIR = target_home / "cron"
+    cron_jobs.JOBS_FILE = cron_jobs.CRON_DIR / "jobs.json"
+    cron_jobs.OUTPUT_DIR = cron_jobs.CRON_DIR / "output"
+    try:
+        yield cron_jobs
+    finally:
+        cron_jobs.CRON_DIR = old_cron_dir
+        cron_jobs.JOBS_FILE = old_jobs_file
+        cron_jobs.OUTPUT_DIR = old_output_dir
 
 
 def cron_list(show_all: bool = False):
     """List all scheduled jobs."""
-    from cron.jobs import list_jobs
-
-    jobs = list_jobs(include_disabled=show_all)
+    with _active_profile_cron_store() as cron_jobs:
+        jobs = cron_jobs.list_jobs(include_disabled=show_all)
 
     if not jobs:
         print(color("No scheduled jobs.", Colors.DIM))
@@ -153,7 +190,6 @@ def cron_tick():
 
 def cron_status():
     """Show cron execution status."""
-    from cron.jobs import list_jobs
     from hermes_cli.gateway import find_gateway_pids
 
     print()
@@ -212,7 +248,8 @@ def cron_status():
 
     print()
 
-    jobs = list_jobs(include_disabled=False)
+    with _active_profile_cron_store() as cron_jobs:
+        jobs = cron_jobs.list_jobs(include_disabled=False)
     if jobs:
         next_runs = [j.get("next_run_at") for j in jobs if j.get("next_run_at")]
         print(f"  {len(jobs)} active job(s)")
@@ -280,15 +317,16 @@ def cron_create(args):
 
 
 def cron_edit(args):
-    from cron.jobs import AmbiguousJobReference, resolve_job_ref
+    from cron.jobs import AmbiguousJobReference
 
-    try:
-        job = resolve_job_ref(args.job_id)
-    except AmbiguousJobReference as exc:
-        print(color(str(exc), Colors.RED))
-        for m in exc.matches:
-            print(f"  {m['id']}  (name: {m.get('name')!r})")
-        return 1
+    with _active_profile_cron_store() as cron_jobs:
+        try:
+            job = cron_jobs.resolve_job_ref(args.job_id)
+        except AmbiguousJobReference as exc:
+            print(color(str(exc), Colors.RED))
+            for m in exc.matches:
+                print(f"  {m['id']}  (name: {m.get('name')!r})")
+            return 1
     if not job:
         print(color(f"Job not found: {args.job_id}", Colors.RED))
         return 1
