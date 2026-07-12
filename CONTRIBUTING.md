@@ -102,6 +102,28 @@ A well-built third-party-product plugin can clear automated review and still be 
 
 ---
 
+## Branching Workflow
+
+This fork uses a mirror-first workflow for `main`:
+
+- `upstream/main` is canonical.
+- local `main` mirrors `upstream/main`.
+- `origin/main` mirrors `upstream/main`.
+- do not develop directly on `main`.
+- create short-lived branches from `upstream/main` for every change.
+
+Daily commands:
+
+```bash
+git sync-main               # refresh local main and mirror origin/main to upstream/main
+git newpr fix/my-change     # create a short-lived branch from upstream/main
+git sync-branch             # rebase current branch on upstream/main
+```
+
+See [`BRANCHING.md`](./BRANCHING.md) for the full workflow note.
+
+---
+
 ## Development Setup
 
 ### Prerequisites

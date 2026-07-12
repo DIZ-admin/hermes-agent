@@ -1,10 +1,17 @@
 # Auto-generated files — collapse diffs and exclude from language stats
 web/package-lock.json linguist-generated=true
+website/static/api/skills-index.json linguist-generated=true
+website/static/api/skills.json linguist-generated=true
+website/static/api/skills-meta.json linguist-generated=true
+website/static/api/automation-blueprints-index.json linguist-generated=true
+
+# Binary font assets are intentionally tracked; keep them out of text diff / stats noise.
+*.woff2 binary linguist-generated=true
 
 # Enforce LF for scripts that run inside Linux containers.
 # Without this, Windows checkout converts to CRLF and breaks `exec` in the
 # container entrypoint with "no such file or directory".
-*.sh        text eol=lf
-Dockerfile  text eol=lf
+*.sh         text eol=lf
+Dockerfile   text eol=lf
 *.dockerfile text eol=lf
-docker/entrypoint.sh text eol=lf
+*.ps1        text eol=crlf
