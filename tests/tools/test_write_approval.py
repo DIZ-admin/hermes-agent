@@ -281,6 +281,34 @@ def test_skill_diff_redacts_secret_shaped_content(hermes_home):
     assert "[REDACTED]" in diff
 
 
+def test_review_redacts_json_secrets_and_plain_pkcs8_key(hermes_home):
+    from tools import write_approval as wa
+
+    assert "fixture-secret" not in wa.redact_review_text(
+        {"password": "fixture-secret"}
+    )
+    pem = (
+        "-----BEGIN PRIVATE KEY-----\n"
+        "fixture-secret\n"
+        "-----END PRIVATE KEY-----"
+    )
+    assert wa.redact_review_text(pem) == "[REDACTED_PRIVATE_KEY]"
+
+
+def test_pending_operations_refuse_dangling_subsystem_symlink(hermes_home):
+    from tools import write_approval as wa
+
+    pending_root = os.path.join(hermes_home, "pending")
+    os.makedirs(pending_root)
+    pending_dir = os.path.join(pending_root, wa.MEMORY)
+    os.symlink(os.path.join(pending_root, "missing-target"), pending_dir)
+
+    assert wa.list_pending(wa.MEMORY) == []
+    assert wa.pending_count(wa.MEMORY) == 0
+    assert wa.get_pending(wa.MEMORY, "deadbeef") is None
+    assert wa.discard_pending(wa.MEMORY, "deadbeef") is False
+
+
 # ---------------------------------------------------------------------------
 # Shared command handler
 # ---------------------------------------------------------------------------

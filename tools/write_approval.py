@@ -72,9 +72,9 @@ _PENDING_ID_RE = re.compile(r"^[a-f0-9]{8}$")
 _REVIEW_SECRET_PATTERNS = (
     (
         re.compile(
-            r"(?i)\b(?:api[_ -]?key|access[_ -]?token|auth(?:entication)?[_ -]?token|"
+            r"(?i)[\"']?\b(?:api[_ -]?key|access[_ -]?token|auth(?:entication)?[_ -]?token|"
             r"client[_ -]?secret|password|passwd|secret|token|authorization|bearer)"
-            r"\b\s*[:=]\s*[^\s,;]+"
+            r"\b[\"']?\s*[:=]\s*[\"']?[^\s,;\"']+[\"']?"
         ),
         "[REDACTED]",
     ),
@@ -82,7 +82,8 @@ _REVIEW_SECRET_PATTERNS = (
     (re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b"), "[REDACTED_TOKEN]"),
     (
         re.compile(
-            r"-----BEGIN [A-Z ]+ PRIVATE KEY-----.*?-----END [A-Z ]+ PRIVATE KEY-----",
+            r"-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----.*?"
+            r"-----END(?: [A-Z0-9]+)* PRIVATE KEY-----",
             re.S,
         ),
         "[REDACTED_PRIVATE_KEY]",
@@ -152,7 +153,7 @@ def _safe_pending_path(subsystem: str, pending_id: str) -> Optional[Path]:
     if subsystem not in _SUBSYSTEMS or not _PENDING_ID_RE.fullmatch(pending_id or ""):
         return None
     directory = _pending_dir(subsystem)
-    if directory.exists() and directory.is_symlink():
+    if directory.is_symlink():
         logger.error("Refusing symlinked pending directory: %s", directory)
         return None
     return directory / f"{pending_id}.json"
@@ -219,7 +220,7 @@ def list_pending(subsystem: str) -> List[Dict[str, Any]]:
     if subsystem not in _SUBSYSTEMS:
         return []
     d = _pending_dir(subsystem)
-    if d.exists() and d.is_symlink():
+    if d.is_symlink():
         logger.error("Refusing symlinked pending directory: %s", d)
         return []
     if not d.exists():
@@ -267,7 +268,7 @@ def discard_pending(subsystem: str, pending_id: str) -> bool:
 def pending_count(subsystem: str) -> int:
     """Cheap count of pending records (for notification badges)."""
     d = _pending_dir(subsystem)
-    if not d.exists():
+    if d.is_symlink() or not d.exists():
         return 0
     try:
         return sum(1 for _ in d.glob("*.json"))
