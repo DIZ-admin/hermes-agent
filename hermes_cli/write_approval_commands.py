@@ -37,7 +37,8 @@ def approval_profile_name(source_profile: str | None, active_profile: str | None
     route can inherit the admin/default gateway's toggle permission. Unstamped
     legacy events retain the active-profile fallback.
     """
-    return (source_profile or active_profile or "").strip()
+    routed = (source_profile or "").strip()
+    return routed or (active_profile or "").strip()
 
 
 def _fmt_state(subsystem: str) -> str:

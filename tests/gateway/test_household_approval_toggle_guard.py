@@ -31,6 +31,7 @@ async def test_household_gateway_cannot_disable_write_approval(handler_name):
         ("family", "dev", "family"),
         ("dev", "family", "dev"),
         (None, "family", "family"),
+        ("   ", "family", "family"),
         (None, None, ""),
     ],
 )
