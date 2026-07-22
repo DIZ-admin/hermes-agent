@@ -45,6 +45,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -65,6 +67,41 @@ _SUBSYSTEMS = (MEMORY, SKILLS)
 # "block all writes" state — to disable a subsystem entirely use its own
 # enable flag (e.g. ``memory.memory_enabled: false``).
 CONFIG_KEY = "write_approval"
+
+_PENDING_ID_RE = re.compile(r"^[a-f0-9]{8}$")
+_REVIEW_SECRET_PATTERNS = (
+    (
+        re.compile(
+            r"(?i)\b(?:api[_ -]?key|access[_ -]?token|auth(?:entication)?[_ -]?token|"
+            r"client[_ -]?secret|password|passwd|secret|token|authorization|bearer)"
+            r"\b\s*[:=]\s*[^\s,;]+"
+        ),
+        "[REDACTED]",
+    ),
+    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+"), "Bearer [REDACTED]"),
+    (re.compile(r"\b\d{8,12}:[A-Za-z0-9_-]{30,}\b"), "[REDACTED_TOKEN]"),
+    (
+        re.compile(
+            r"-----BEGIN [A-Z ]+ PRIVATE KEY-----.*?-----END [A-Z ]+ PRIVATE KEY-----",
+            re.S,
+        ),
+        "[REDACTED_PRIVATE_KEY]",
+    ),
+)
+
+
+def redact_review_text(value: Any, *, limit: Optional[int] = None) -> str:
+    """Return bounded, single-line review text without secret-shaped values."""
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    text = " ".join(text.split())
+    for pattern, replacement in _REVIEW_SECRET_PATTERNS:
+        text = pattern.sub(replacement, text)
+    if limit is not None and len(text) > limit:
+        return text[: max(0, limit - 1)] + "…"
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +148,16 @@ def _pending_dir(subsystem: str) -> Path:
     return get_hermes_home() / "pending" / subsystem
 
 
+def _safe_pending_path(subsystem: str, pending_id: str) -> Optional[Path]:
+    if subsystem not in _SUBSYSTEMS or not _PENDING_ID_RE.fullmatch(pending_id or ""):
+        return None
+    directory = _pending_dir(subsystem)
+    if directory.exists() and directory.is_symlink():
+        logger.error("Refusing symlinked pending directory: %s", directory)
+        return None
+    return directory / f"{pending_id}.json"
+
+
 def stage_write(subsystem: str, payload: Dict[str, Any],
                 *, summary: str, origin: str) -> Dict[str, Any]:
     """Persist a pending write and return a short record describing it.
@@ -134,18 +181,34 @@ def stage_write(subsystem: str, payload: Dict[str, Any],
         "id": pid,
         "subsystem": subsystem,
         "action": payload.get("action", ""),
-        "summary": (summary or "").strip(),
+        "summary": redact_review_text(summary, limit=240),
         "origin": origin or "foreground",
         "created_at": time.time(),
         "payload": payload,
     }
     try:
         d = _pending_dir(subsystem)
+        if subsystem not in _SUBSYSTEMS:
+            raise ValueError(f"unknown pending subsystem: {subsystem}")
         d.mkdir(parents=True, exist_ok=True)
+        if d.is_symlink():
+            raise OSError(f"pending directory is a symlink: {d}")
+        os.chmod(d, 0o700)
         path = d / f"{pid}.json"
-        tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{pid}.", suffix=".tmp", dir=d)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                tmp.write(json.dumps(record, ensure_ascii=False, indent=2))
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_name, path)
+            os.chmod(path, 0o600)
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except FileNotFoundError:
+                pass
     except Exception as e:  # pragma: no cover - disk failure path
         logger.error("Failed to stage pending %s write: %s", subsystem, e, exc_info=True)
     return record
@@ -153,11 +216,19 @@ def stage_write(subsystem: str, payload: Dict[str, Any],
 
 def list_pending(subsystem: str) -> List[Dict[str, Any]]:
     """Return all pending records for ``subsystem``, oldest first."""
+    if subsystem not in _SUBSYSTEMS:
+        return []
     d = _pending_dir(subsystem)
+    if d.exists() and d.is_symlink():
+        logger.error("Refusing symlinked pending directory: %s", d)
+        return []
     if not d.exists():
         return []
     records: List[Dict[str, Any]] = []
     for p in d.glob("*.json"):
+        if p.is_symlink() or not _PENDING_ID_RE.fullmatch(p.stem):
+            logger.warning("Skipping unsafe pending record path: %s", p)
+            continue
         try:
             records.append(json.loads(p.read_text(encoding="utf-8")))
         except Exception:
@@ -168,7 +239,9 @@ def list_pending(subsystem: str) -> List[Dict[str, Any]]:
 
 def get_pending(subsystem: str, pending_id: str) -> Optional[Dict[str, Any]]:
     """Return a single pending record by id, or None."""
-    path = _pending_dir(subsystem) / f"{pending_id}.json"
+    path = _safe_pending_path(subsystem, pending_id)
+    if path is None or path.is_symlink():
+        return None
     if not path.exists():
         return None
     try:
@@ -179,7 +252,9 @@ def get_pending(subsystem: str, pending_id: str) -> Optional[Dict[str, Any]]:
 
 def discard_pending(subsystem: str, pending_id: str) -> bool:
     """Delete a pending record. Returns True if it existed."""
-    path = _pending_dir(subsystem) / f"{pending_id}.json"
+    path = _safe_pending_path(subsystem, pending_id)
+    if path is None or path.is_symlink():
+        return False
     try:
         if path.exists():
             path.unlink()
@@ -440,7 +515,7 @@ def skill_pending_diff(record: Dict[str, Any]) -> str:
     name = payload.get("name", "")
 
     if action == "create":
-        return (payload.get("content") or "")
+        return redact_review_text(payload.get("content") or "")
 
     # Resolve current on-disk content for diffable actions.
     try:
@@ -490,4 +565,4 @@ def skill_pending_diff(record: Dict[str, Any]) -> str:
         tofile=f"b/{target_label}",
     )
     text = "".join(diff)
-    return text or "(no textual change)"
+    return redact_review_text(text or "(no textual change)")

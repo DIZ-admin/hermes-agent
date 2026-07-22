@@ -9,6 +9,7 @@ subcommand dispatch.
 
 import json
 import os
+import stat
 import tempfile
 import shutil
 
@@ -235,6 +236,49 @@ def test_pending_store_roundtrip(hermes_home):
     assert wa.discard_pending("memory", rec["id"]) is True
     assert wa.pending_count("memory") == 0
     assert wa.get_pending("memory", rec["id"]) is None
+
+
+def test_pending_review_redacts_summary_and_uses_private_permissions(hermes_home):
+    from hermes_cli.write_approval_commands import handle_pending_subcommand
+    from tools import write_approval as wa
+
+    rec = wa.stage_write(
+        "memory",
+        {"action": "add", "target": "user", "content": "fixture-secret"},
+        summary="password=fixture-secret token=fixture-token",
+        origin="foreground",
+    )
+    rendered = handle_pending_subcommand(wa.MEMORY, ["pending"])
+    assert rendered is not None
+    assert "fixture-secret" not in rendered
+    assert "fixture-token" not in rendered
+    assert "[REDACTED]" in rendered
+
+    pending_dir = os.path.join(hermes_home, "pending", "memory")
+    record_path = os.path.join(pending_dir, f"{rec['id']}.json")
+    assert stat.S_IMODE(os.stat(pending_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(record_path).st_mode) == 0o600
+
+
+def test_pending_ids_cannot_escape_subsystem_directory(hermes_home):
+    from tools import write_approval as wa
+
+    assert wa.get_pending(wa.MEMORY, "../escape") is None
+    assert wa.discard_pending(wa.MEMORY, "../escape") is False
+
+
+def test_skill_diff_redacts_secret_shaped_content(hermes_home):
+    from tools import write_approval as wa
+
+    record = {
+        "payload": {
+            "action": "create",
+            "content": "---\nname: fixture\n---\npassword=fixture-secret\n",
+        },
+    }
+    diff = wa.skill_pending_diff(record)
+    assert "fixture-secret" not in diff
+    assert "[REDACTED]" in diff
 
 
 # ---------------------------------------------------------------------------
