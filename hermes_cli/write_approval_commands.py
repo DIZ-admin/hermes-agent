@@ -21,6 +21,26 @@ from typing import List, Optional
 from tools import write_approval as wa
 
 
+HOUSEHOLD_PROFILES = frozenset({"family", "home", "partner", "kid-1", "kid-2"})
+
+
+def approval_toggle_allowed(profile_name: str) -> bool:
+    """Return whether a profile may change its durable-write approval gates."""
+    return (profile_name or "").strip().lower() not in HOUSEHOLD_PROFILES
+
+
+def approval_profile_name(source_profile: str | None, active_profile: str | None) -> str:
+    """Resolve the profile whose approval command is being handled.
+
+    Multiplexed gateways stamp the routed profile on the inbound source. That
+    profile must win over the process-active profile, otherwise a household
+    route can inherit the admin/default gateway's toggle permission. Unstamped
+    legacy events retain the active-profile fallback.
+    """
+    routed = (source_profile or "").strip()
+    return routed or (active_profile or "").strip()
+
+
 def _fmt_state(subsystem: str) -> str:
     on = wa.write_approval_enabled(subsystem)
     return f"{subsystem}.write_approval = {'on' if on else 'off'}"
@@ -38,7 +58,10 @@ def _fmt_pending_list(subsystem: str) -> str:
     for r in records:
         origin = r.get("origin", "foreground")
         tag = " [auto]" if origin == "background_review" else ""
-        lines.append(f"  {r['id']}{tag}  {r.get('summary', '')}")
+        lines.append(
+            f"  {r['id']}{tag}  "
+            f"{wa.redact_review_text(r.get('summary', ''), limit=240)}"
+        )
     where = "/{s} approve <id>".format(s=subsystem)
     lines.append("")
     lines.append(f"Apply: {where}   Reject: /{subsystem} reject <id>")
@@ -177,7 +200,10 @@ def _diff(rest: List[str]) -> str:
     if not rec:
         return f"No pending skill write with id '{rest[0]}'."
     diff = wa.skill_pending_diff(rec)
-    header = f"# Pending skill write {rec['id']}: {rec.get('summary', '')}\n"
+    header = (
+        f"# Pending skill write {rec['id']}: "
+        f"{wa.redact_review_text(rec.get('summary', ''), limit=240)}\n"
+    )
     return header + "\n" + diff
 
 
