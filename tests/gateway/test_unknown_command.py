@@ -315,6 +315,7 @@ async def test_command_hook_fires_for_plugin_registered_command(monkeypatch):
     event = _make_event("/metricas dias:7")
     event.source.chat_type = "thread"
     event.source.thread_id = "t1"
+    event.source.profile = "family"
     result = await runner._handle_message(event)
 
     assert result == "intercepted"
@@ -324,6 +325,7 @@ async def test_command_hook_fires_for_plugin_registered_command(monkeypatch):
     # Args are passed through in both "args" and "raw_args" keys.
     ctx = call_args.args[1]
     assert ctx["raw_args"] == "dias:7"
+    assert ctx["profile"] == "family"
     assert ctx["chat_id"] == "c1"
     assert ctx["chat_type"] == "thread"
     assert ctx["thread_id"] == "t1"
