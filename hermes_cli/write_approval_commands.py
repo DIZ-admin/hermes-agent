@@ -24,9 +24,13 @@ from tools import write_approval as wa
 HOUSEHOLD_PROFILES = frozenset({"family", "home", "partner", "kid-1", "kid-2"})
 
 
-def approval_toggle_allowed(profile_name: str) -> bool:
+def approval_toggle_allowed(profile_name: str | None) -> bool:
     """Return whether a profile may change its durable-write approval gates."""
-    return (profile_name or "").strip().lower() not in HOUSEHOLD_PROFILES
+    normalized = (profile_name or "").strip().lower()
+    # Missing profile identity must fail closed. In a multiplexed gateway, an
+    # unstamped route must never inherit toggle permission from an unknown
+    # process/default profile.
+    return bool(normalized) and normalized not in HOUSEHOLD_PROFILES
 
 
 def approval_profile_name(source_profile: str | None, active_profile: str | None) -> str:
