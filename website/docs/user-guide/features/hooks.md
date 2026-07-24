@@ -81,7 +81,7 @@ async def handle(event_type: str, context: dict):
 | `agent:start` | Agent begins processing a message | `platform`, `user_id`, `session_id`, `message` |
 | `agent:step` | Each iteration of the tool-calling loop | `platform`, `user_id`, `session_id`, `iteration`, `tool_names` |
 | `agent:end` | Agent finishes processing | `platform`, `user_id`, `session_id`, `message`, `response` |
-| `command:*` | Any slash command executed | `platform`, `user_id`, `command`, `args` |
+| `command:*` | Any slash command executed | `platform`, `user_id`, `chat_id`, `chat_type`, `thread_id`, `command`, `args` |
 
 #### Wildcard Matching
 
