@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router'
 
 import { type CommandCenterSection } from '@/app/command-center'
 import {
@@ -47,6 +47,10 @@ export function useOverlayRouting() {
     [navigate]
   )
 
+  const resetOverlayReturnRoute = useCallback(() => {
+    returnPathRef.current = NEW_CHAT_ROUTE
+  }, [])
+
   const closeOverlayToPreviousRoute = useCallback(
     () => navigate(returnPathRef.current || NEW_CHAT_ROUTE, { replace: true }),
     [navigate]
@@ -75,6 +79,7 @@ export function useOverlayRouting() {
     openCommandCenterSection,
     openStarmap,
     profilesOpen,
+    resetOverlayReturnRoute,
     settingsOpen,
     starmapOpen,
     toggleCommandCenter
