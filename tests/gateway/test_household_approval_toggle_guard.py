@@ -40,4 +40,4 @@ def test_routed_profile_wins_over_active_profile(
 ):
     resolved = approval_profile_name(source_profile, active_profile)
     assert resolved == expected
-    assert approval_toggle_allowed(resolved) is (expected != "family")
+    assert approval_toggle_allowed(resolved) is (bool(expected) and expected != "family")

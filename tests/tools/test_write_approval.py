@@ -42,6 +42,8 @@ def test_household_profiles_cannot_toggle_approval_gate():
 
     for profile in ("family", "home", "partner", "kid-1", "kid-2"):
         assert approval_toggle_allowed(profile) is False
+    assert approval_toggle_allowed("") is False
+    assert approval_toggle_allowed(None) is False
     assert approval_toggle_allowed("dev") is True
     assert approval_toggle_allowed("rescue") is True
 
