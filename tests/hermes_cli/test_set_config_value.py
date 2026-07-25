@@ -108,6 +108,14 @@ class TestConfigYamlRouting:
         assert "docker" in config
         assert "terminal" not in _read_env(_isolated_hermes_home)
 
+    def test_json_list_value_preserves_structured_type(self, _isolated_hermes_home):
+        """JSON list values should be written as YAML lists, not strings."""
+        set_config_value("agent.disabled_toolsets", '["computer_use"]')
+        import yaml
+
+        config = yaml.safe_load(_read_config(_isolated_hermes_home))
+        assert config["agent"]["disabled_toolsets"] == ["computer_use"]
+
     def test_terminal_image_goes_to_config(self, _isolated_hermes_home):
         """TERMINAL_DOCKER_IMAGE doesn't match _API_KEY or _TOKEN, so config.yaml."""
         set_config_value("terminal.docker_image", "python:3.12")
