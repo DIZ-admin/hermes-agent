@@ -19,12 +19,21 @@ skip cleanly when it is not. Container spin-up exceeds the 30s suite default,
 so the timeout is bumped to 180s.
 
 Run:  pytest -m integration tests/integration/test_vision_docker_resolve.py
+For a preloaded equivalent image: ``HERMES_DOCKER_TEST_IMAGE=<image> pytest -m integration ...``.
 """
 import base64
+import importlib.util
+import os
 import shutil
 import subprocess
 
 import pytest
+
+_TIMEOUT_MARKERS = (
+    (pytest.mark.timeout(180),)
+    if importlib.util.find_spec("pytest_timeout")
+    else ()
+)
 
 
 def _docker_available() -> bool:
@@ -41,9 +50,11 @@ def _docker_available() -> bool:
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.timeout(180),
+    *_TIMEOUT_MARKERS,
     pytest.mark.skipif(not _docker_available(), reason="Docker daemon not available"),
 ]
+
+_DOCKER_TEST_IMAGE = os.environ.get("HERMES_DOCKER_TEST_IMAGE", "python:3.11-slim")
 
 # A real 1x1 PNG.
 _TINY_PNG = base64.b64decode(
@@ -67,7 +78,7 @@ def docker_backend(request, monkeypatch):
 
     task_id = f"vision-docker-resolve-{request.node.name}"
     env = docker_env.DockerEnvironment(
-        image="python:3.11-slim",
+        image=_DOCKER_TEST_IMAGE,
         cwd="/workspace",
         timeout=120,
         task_id=task_id,
