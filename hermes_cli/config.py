@@ -8799,18 +8799,27 @@ def set_config_value(key: str, value: str, force: bool = False):
     # inline navigation here silently overwrote lists with dicts.
 
     # Preserve values for string-typed settings.  In particular, enum members
-    # such as approvals.mode="off" must not become YAML booleans.  Unknown keys
-    # retain the historical best-effort coercion behavior.
+    # such as approvals.mode="off" must not become YAML booleans.  Structured
+    # values accept JSON literals when their default is already a list/dict;
+    # this keeps `config set` type-safe for nested toolset and provider settings.
+    default_value = _default_value_for_key(key)
     coerced_value: Any = value
-    if not isinstance(_default_value_for_key(key), str):
-        if value.lower() in {'true', 'yes', 'on'}:
+    if isinstance(default_value, (list, dict)) and value.lstrip().startswith(("[", "{")):
+        try:
+            parsed_value = json.loads(value)
+        except json.JSONDecodeError:
+            parsed_value = None
+        if isinstance(parsed_value, type(default_value)):
+            coerced_value = parsed_value
+    if isinstance(coerced_value, str) and not isinstance(default_value, str):
+        if coerced_value.lower() in {'true', 'yes', 'on'}:
             coerced_value = True
-        elif value.lower() in {'false', 'no', 'off'}:
+        elif coerced_value.lower() in {'false', 'no', 'off'}:
             coerced_value = False
-        elif value.isdigit():
-            coerced_value = int(value)
-        elif value.replace('.', '', 1).isdigit():
-            coerced_value = float(value)
+        elif coerced_value.isdigit():
+            coerced_value = int(coerced_value)
+        elif coerced_value.replace('.', '', 1).isdigit():
+            coerced_value = float(coerced_value)
 
     value = coerced_value
     _set_nested(user_config, key, value)
