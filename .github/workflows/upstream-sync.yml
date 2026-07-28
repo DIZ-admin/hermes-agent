@@ -1,0 +1,112 @@
+name: Upstream sync proposal
+
+on:
+  schedule:
+    # Monday 06:30 UTC. The workflow only opens a draft PR; it never merges
+    # or deploys a runtime change.
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync-proposal
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    # This workflow writes branches and PRs, so never run it from an arbitrary
+    # fork where the repository policy and credentials are not controlled.
+    if: github.repository == 'DIZ-admin/hermes-agent'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/NousResearch/hermes-agent.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/NousResearch/hermes-agent.git
+          git fetch --no-tags upstream main
+
+      - name: Check for an existing proposal
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main \
+            --json headRefName --jq '[.[].headRefName | select(startswith("sync/upstream-"))] | length')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Compute divergence
+        id: divergence
+        run: |
+          read behind ahead <<EOF
+          $(git rev-list --left-right --count HEAD...upstream/main)
+          EOF
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "ahead=$ahead" >> "$GITHUB_OUTPUT"
+
+      - name: Stop when no proposal is needed
+        if: steps.existing.outputs.count != '0' || steps.divergence.outputs.behind == '0'
+        run: |
+          {
+            echo "## Upstream sync"
+            echo
+            echo "behind: ${{ steps.divergence.outputs.behind }}"
+            echo "ahead: ${{ steps.divergence.outputs.ahead }}"
+            echo "open sync proposals: ${{ steps.existing.outputs.count }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge upstream into a proposal branch
+        if: steps.existing.outputs.count == '0' && steps.divergence.outputs.behind != '0'
+        id: merge
+        run: |
+          branch="sync/upstream-$(date -u +%F)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git merge --abort || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+
+      - name: Record a merge-conflict issue
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Upstream sync requires manual conflict resolution"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body \
+              "Automatic merge of \`upstream/main\` into \`main\` conflicted in run $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Resolve it in a dedicated \`sync/upstream-YYYY-MM-DD\` branch; do not merge upstream directly into the live runtime checkout."
+          fi
+
+      - name: Push proposal branch
+        if: steps.merge.outputs.conflict == 'false'
+        run: git push origin "HEAD:${{ steps.merge.outputs.branch }}"
+
+      - name: Open draft pull request
+        if: steps.merge.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create --repo "$GITHUB_REPOSITORY" --draft \
+            --base main --head "${{ steps.merge.outputs.branch }}" \
+            --title "chore: sync upstream/main ($(date -u +%F))" \
+            --body "## Upstream sync proposal
+
+          This PR merges \`NousResearch/hermes-agent:main\` into the maintained fork. It was generated automatically and must pass CI plus the runtime release checklist before merge.
+
+          - upstream commits pending before merge: ${{ steps.divergence.outputs.behind }}
+          - fork-only commits before merge: ${{ steps.divergence.outputs.ahead }}
+          - workflow run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
