@@ -461,6 +461,23 @@ class TestGatewayRuntimeStatus:
         assert payload["pid"] == os.getpid()
         assert payload["start_time"] == 2000
 
+    def test_write_runtime_status_starting_clears_stale_platforms(self, tmp_path, monkeypatch):
+        """A new process must not report adapters owned by its predecessor."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+        state_path = tmp_path / "gateway_state.json"
+        state_path.write_text(json.dumps({
+            "gateway_state": "running",
+            "platforms": {
+                "telegram": {"state": "connected"},
+                "api_server": {"state": "disconnected"},
+            },
+        }))
+
+        status.write_runtime_status(gateway_state="starting")
+
+        assert status.read_runtime_status()["platforms"] == {}
+
     def test_runtime_status_running_pid_rejects_stale_record_for_supervisor_pid(self, monkeypatch):
         """Regression: stale profile runtime state must not mark s6 supervisors live.
 

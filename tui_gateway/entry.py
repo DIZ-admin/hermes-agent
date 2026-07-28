@@ -13,6 +13,7 @@ hermes_bootstrap.harden_import_path()
 import json
 import logging
 import signal
+import threading
 import time
 import traceback
 
@@ -184,18 +185,23 @@ def _log_signal(signum: int, frame) -> None:
 # with hasattr so ``python -m tui_gateway.entry`` (spawned by
 # ``hermes --tui``) imports cleanly there.  SIGBREAK (Windows' Ctrl+Break)
 # is installed when available as a weaker equivalent of SIGHUP.
-if hasattr(signal, "SIGPIPE"):
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-if hasattr(signal, "SIGTERM"):
-    signal.signal(signal.SIGTERM, _log_signal)
-if hasattr(signal, "SIGHUP"):
-    signal.signal(signal.SIGHUP, _log_signal)
-elif hasattr(signal, "SIGBREAK"):
-    # Windows-only: Ctrl+Break in a console window delivers SIGBREAK.
-    # Route it through the same handler so kills are diagnosable.
-    signal.signal(signal.SIGBREAK, _log_signal)
-if hasattr(signal, "SIGINT"):
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+# ``tui_gateway.entry`` is also imported by dashboard worker threads during
+# MCP discovery. Python only permits installing process signal handlers from
+# the main interpreter thread, so leave the host process' handlers untouched
+# in that embedding path.
+if threading.current_thread() is threading.main_thread():
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _log_signal)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _log_signal)
+    elif hasattr(signal, "SIGBREAK"):
+        # Windows-only: Ctrl+Break in a console window delivers SIGBREAK.
+        # Route it through the same handler so kills are diagnosable.
+        signal.signal(signal.SIGBREAK, _log_signal)
+    if hasattr(signal, "SIGINT"):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def _log_exit(reason: str) -> None:
