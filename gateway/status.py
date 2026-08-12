@@ -988,6 +988,11 @@ def write_runtime_status(
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
     payload = _read_json_file(path) or _build_runtime_status_record()
+    # A new gateway process must not inherit adapters reported by a previous
+    # process.  Otherwise a one-off adapter (for example an API server during
+    # a takeover) survives in the dashboard as permanently "disconnected".
+    if gateway_state == "starting":
+        payload["platforms"] = {}
     current_record = _build_pid_record()
     payload.setdefault("platforms", {})
     payload["kind"] = current_record["kind"]
